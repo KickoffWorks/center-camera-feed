@@ -14,7 +14,7 @@
     </div>
 
     <p class="description">
-      Move your self-view to the top center of the screen for better eye contact.
+      Position a video feed near your camera for better eye contact.
     </p>
 
     <div class="toggle-container">
@@ -25,16 +25,42 @@
       <span class="toggle-label" id="toggleLabel">Disabled</span>
     </div>
 
+    <div class="settings-section">
+      <label class="setting-label">Video Source</label>
+      <div class="button-group" id="sourceGroup">
+        <button class="btn-option active" data-value="self">Your Camera</button>
+        <button class="btn-option" data-value="active-speaker">Active Speaker</button>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <label class="setting-label">Position</label>
+      <div class="position-grid" id="positionGrid">
+        <button class="pos-btn" data-value="top-left" title="Top Left">↖</button>
+        <button class="pos-btn active" data-value="top-center" title="Top Center">↑</button>
+        <button class="pos-btn" data-value="top-right" title="Top Right">↗</button>
+        <button class="pos-btn" data-value="bottom-left" title="Bottom Left">↙</button>
+        <button class="pos-btn" data-value="bottom-center" title="Bottom Center">↓</button>
+        <button class="pos-btn" data-value="bottom-right" title="Bottom Right">↘</button>
+      </div>
+      <button class="reset-btn" id="resetPosition">Reset to preset position</button>
+    </div>
+
+    <div class="settings-section">
+      <label class="setting-label">Size: <span id="sizeValue">200</span>px</label>
+      <input type="range" id="sizeSlider" min="100" max="400" value="200" class="size-slider">
+    </div>
+
     <div class="status" id="status">
       Open a video call to use this extension.
     </div>
 
     <div class="supported">
-      <p>Supported platforms:</p>
+      <p>Supported:</p>
       <ul>
         <li>Google Meet</li>
         <li>Zoom</li>
-        <li>Microsoft Teams</li>
+        <li>Teams</li>
         <li>Webex</li>
         <li>Discord</li>
       </ul>
