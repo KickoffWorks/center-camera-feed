@@ -3,16 +3,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   const toggleLabel = document.getElementById('toggleLabel');
   const status = document.getElementById('status');
   const sourceGroup = document.getElementById('sourceGroup');
+  const modeGroup = document.getElementById('modeGroup');
+  const modeHint = document.getElementById('modeHint');
   const positionGrid = document.getElementById('positionGrid');
   const resetPosition = document.getElementById('resetPosition');
   const sizeSlider = document.getElementById('sizeSlider');
   const sizeValue = document.getElementById('sizeValue');
+
+  const MODE_HINTS = {
+    'move': 'Moves the original video element',
+    'mirror': 'Creates a copy of the video stream'
+  };
 
   // Load saved state
   const result = await chrome.storage.local.get([
     'enabled',
     'position',
     'videoSource',
+    'displayMode',
     'videoSize'
   ]);
 
@@ -22,11 +30,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Set initial values
   const currentPosition = result.position || 'top-center';
   const currentSource = result.videoSource || 'self';
+  const currentMode = result.displayMode || 'move';
   const currentSize = result.videoSize || 200;
 
   // Update UI to reflect saved settings
   updatePositionUI(currentPosition);
   updateSourceUI(currentSource);
+  updateModeUI(currentMode);
   sizeSlider.value = currentSize;
   sizeValue.textContent = currentSize;
 
@@ -86,6 +96,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         await chrome.tabs.sendMessage(tab.id, {
           action: 'updateSettings',
           settings: { videoSource: value }
+        });
+      } catch (e) {
+        // Content script not ready
+      }
+    }
+  });
+
+  // Handle display mode selection
+  modeGroup.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.btn-option');
+    if (!btn) return;
+
+    const value = btn.dataset.value;
+    updateModeUI(value);
+
+    await chrome.storage.local.set({ displayMode: value });
+
+    if (isSupported && toggle.checked) {
+      try {
+        await chrome.tabs.sendMessage(tab.id, {
+          action: 'updateSettings',
+          settings: { displayMode: value }
         });
       } catch (e) {
         // Content script not ready
@@ -167,5 +199,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     sourceGroup.querySelectorAll('.btn-option').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.value === source);
     });
+  }
+
+  function updateModeUI(mode) {
+    modeGroup.querySelectorAll('.btn-option').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.value === mode);
+    });
+    modeHint.textContent = MODE_HINTS[mode] || '';
   }
 });

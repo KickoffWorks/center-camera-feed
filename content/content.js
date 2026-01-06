@@ -5,12 +5,18 @@
 
   // State
   let isEnabled = false;
-  let clonedVideo = null;
+  let activeVideo = null; // The video currently in our container (moved or cloned)
   let observer = null;
   let activeSpeakerObserver = null;
+  let pollInterval = null;
+
+  // For restoring moved videos
+  let movedVideoData = null; // { video, originalParent, originalNextSibling, originalStyles }
+
   let currentSettings = {
     position: 'top-center',
     videoSource: 'self', // 'self' or 'active-speaker'
+    displayMode: 'move', // 'move' (default) or 'mirror'
     customPosition: null, // { x, y } for dragged position
     videoSize: 200
   };
@@ -124,7 +130,7 @@
     if (!video) {
       const allVideos = document.querySelectorAll('video');
       for (const v of allVideos) {
-        if (v.srcObject && v.muted) {
+        if (v.srcObject && v.muted && !v.classList.contains('ccf-video')) {
           video = v;
           break;
         }
@@ -143,13 +149,13 @@
 
     // Platform-specific fallbacks
     if (!video) {
-      video = findActiveSpeakerFallback(platform);
+      video = findActiveSpeakerFallback();
     }
 
     return video;
   }
 
-  function findActiveSpeakerFallback(platform) {
+  function findActiveSpeakerFallback() {
     // Try to find the largest non-self video (often the active speaker)
     const allVideos = document.querySelectorAll('video');
     let largestVideo = null;
@@ -157,6 +163,7 @@
 
     for (const video of allVideos) {
       if (!video.srcObject || video.muted) continue; // Skip self-view (usually muted)
+      if (video.classList.contains('ccf-video')) continue; // Skip our own video
 
       const rect = video.getBoundingClientRect();
       const area = rect.width * rect.height;
@@ -276,51 +283,140 @@
     }
   }
 
-  function cloneVideoToContainer(sourceVideo) {
+  function restoreMovedVideo() {
+    if (movedVideoData) {
+      const { video, originalParent, originalNextSibling, originalStyles } = movedVideoData;
+
+      // Restore original styles
+      video.style.cssText = originalStyles;
+      video.classList.remove('ccf-video', 'ccf-video-moved');
+
+      // Put video back in original location
+      if (originalParent) {
+        if (originalNextSibling && originalNextSibling.parentNode === originalParent) {
+          originalParent.insertBefore(video, originalNextSibling);
+        } else {
+          originalParent.appendChild(video);
+        }
+      }
+
+      movedVideoData = null;
+    }
+  }
+
+  function moveVideoToContainer(sourceVideo) {
     const container = createContainer();
 
-    // Remove existing cloned video if any
+    // Restore any previously moved video first
+    restoreMovedVideo();
+
+    // Remove any existing video in container
+    const existingVideo = container.querySelector('.ccf-video');
+    if (existingVideo && existingVideo !== sourceVideo) {
+      existingVideo.remove();
+    }
+
+    // Save original location and styles
+    movedVideoData = {
+      video: sourceVideo,
+      originalParent: sourceVideo.parentNode,
+      originalNextSibling: sourceVideo.nextSibling,
+      originalStyles: sourceVideo.style.cssText
+    };
+
+    // Move the video element to our container
+    sourceVideo.classList.add('ccf-video', 'ccf-video-moved');
+    sourceVideo.style.width = currentSettings.videoSize + 'px';
+    sourceVideo.style.height = 'auto';
+    sourceVideo.style.borderRadius = '8px';
+    sourceVideo.style.pointerEvents = 'none';
+    sourceVideo.style.position = 'static';
+    sourceVideo.style.margin = '0';
+    sourceVideo.style.padding = '0';
+
+    // Mirror for self-view
+    if (currentSettings.videoSource === 'self') {
+      sourceVideo.style.transform = 'scaleX(-1)';
+    } else {
+      sourceVideo.style.transform = 'none';
+    }
+
+    container.appendChild(sourceVideo);
+    activeVideo = sourceVideo;
+
+    applyPosition(container);
+    updateSourceIndicator();
+    container.style.display = 'flex';
+
+    return sourceVideo;
+  }
+
+  function mirrorVideoToContainer(sourceVideo) {
+    const container = createContainer();
+
+    // Restore any previously moved video first
+    restoreMovedVideo();
+
+    // Remove existing video if any
     const existingVideo = container.querySelector('.ccf-video');
     if (existingVideo) {
       existingVideo.remove();
     }
 
-    // Clone the video element
-    clonedVideo = document.createElement('video');
-    clonedVideo.className = 'ccf-video';
-    clonedVideo.autoplay = true;
-    clonedVideo.muted = true;
-    clonedVideo.playsInline = true;
+    // Create a new video element that mirrors the source
+    const mirroredVideo = document.createElement('video');
+    mirroredVideo.className = 'ccf-video ccf-video-mirrored';
+    mirroredVideo.autoplay = true;
+    mirroredVideo.muted = true;
+    mirroredVideo.playsInline = true;
 
     // Apply size
-    clonedVideo.style.width = currentSettings.videoSize + 'px';
+    mirroredVideo.style.width = currentSettings.videoSize + 'px';
 
     // Copy the stream
     if (sourceVideo.srcObject) {
-      clonedVideo.srcObject = sourceVideo.srcObject;
+      mirroredVideo.srcObject = sourceVideo.srcObject;
     }
 
-    // Mirror only for self-view
+    // Mirror for self-view
     if (currentSettings.videoSource === 'self') {
-      clonedVideo.style.transform = 'scaleX(-1)';
+      mirroredVideo.style.transform = 'scaleX(-1)';
     } else {
-      clonedVideo.style.transform = 'none';
+      mirroredVideo.style.transform = 'none';
     }
 
-    container.appendChild(clonedVideo);
+    container.appendChild(mirroredVideo);
+    activeVideo = mirroredVideo;
+
     applyPosition(container);
     updateSourceIndicator();
     container.style.display = 'flex';
 
-    return clonedVideo;
+    return mirroredVideo;
+  }
+
+  function setupVideoInContainer(sourceVideo) {
+    if (currentSettings.displayMode === 'move') {
+      return moveVideoToContainer(sourceVideo);
+    } else {
+      return mirrorVideoToContainer(sourceVideo);
+    }
   }
 
   function updateVideo() {
     const targetVideo = getTargetVideo();
     if (!targetVideo) return;
 
-    if (!clonedVideo || clonedVideo.srcObject !== targetVideo.srcObject) {
-      cloneVideoToContainer(targetVideo);
+    // For move mode, check if it's a different video element
+    // For mirror mode, check if the stream changed
+    if (currentSettings.displayMode === 'move') {
+      if (activeVideo !== targetVideo) {
+        setupVideoInContainer(targetVideo);
+      }
+    } else {
+      if (!activeVideo || activeVideo.srcObject !== targetVideo.srcObject) {
+        mirrorVideoToContainer(targetVideo);
+      }
     }
   }
 
@@ -328,19 +424,31 @@
     if (activeSpeakerObserver) {
       activeSpeakerObserver.disconnect();
     }
+    if (pollInterval) {
+      clearInterval(pollInterval);
+    }
 
     // Poll for active speaker changes
-    const pollInterval = setInterval(() => {
+    pollInterval = setInterval(() => {
       if (!isEnabled) {
         clearInterval(pollInterval);
+        pollInterval = null;
         return;
       }
 
       if (currentSettings.videoSource === 'active-speaker') {
         const newSpeaker = findActiveSpeaker();
-        if (newSpeaker && clonedVideo && newSpeaker.srcObject !== clonedVideo.srcObject) {
-          clonedVideo.srcObject = newSpeaker.srcObject;
-          clonedVideo.style.transform = 'none'; // Don't mirror active speaker
+        if (newSpeaker && activeVideo) {
+          if (currentSettings.displayMode === 'move') {
+            if (newSpeaker !== activeVideo) {
+              setupVideoInContainer(newSpeaker);
+            }
+          } else {
+            if (newSpeaker.srcObject !== activeVideo.srcObject) {
+              activeVideo.srcObject = newSpeaker.srcObject;
+              activeVideo.style.transform = 'none';
+            }
+          }
         }
       }
     }, 500);
@@ -360,6 +468,17 @@
     });
   }
 
+  function stopActiveSpeakerDetection() {
+    if (activeSpeakerObserver) {
+      activeSpeakerObserver.disconnect();
+      activeSpeakerObserver = null;
+    }
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  }
+
   function enable() {
     if (isEnabled) return;
 
@@ -370,7 +489,7 @@
       return;
     }
 
-    cloneVideoToContainer(targetVideo);
+    setupVideoInContainer(targetVideo);
     isEnabled = true;
 
     // Watch for video source changes
@@ -394,19 +513,27 @@
       startActiveSpeakerDetection();
     }
 
-    console.log('Center Camera Feed: Enabled');
+    console.log('Center Camera Feed: Enabled (' + currentSettings.displayMode + ' mode)');
   }
 
   function disable() {
     if (!isEnabled) return;
 
     const container = document.getElementById(CONTAINER_ID);
-    if (container) {
-      container.style.display = 'none';
+
+    // Restore moved video to original location
+    restoreMovedVideo();
+
+    // For mirrored videos, just clear the stream
+    if (activeVideo && activeVideo.classList.contains('ccf-video-mirrored')) {
+      activeVideo.srcObject = null;
+      activeVideo.remove();
     }
 
-    if (clonedVideo) {
-      clonedVideo.srcObject = null;
+    activeVideo = null;
+
+    if (container) {
+      container.style.display = 'none';
     }
 
     if (observer) {
@@ -414,10 +541,7 @@
       observer = null;
     }
 
-    if (activeSpeakerObserver) {
-      activeSpeakerObserver.disconnect();
-      activeSpeakerObserver = null;
-    }
+    stopActiveSpeakerDetection();
 
     isEnabled = false;
     console.log('Center Camera Feed: Disabled');
@@ -427,6 +551,7 @@
     const positionChanged = newSettings.position && newSettings.position !== currentSettings.position;
     const sourceChanged = newSettings.videoSource && newSettings.videoSource !== currentSettings.videoSource;
     const sizeChanged = newSettings.videoSize && newSettings.videoSize !== currentSettings.videoSize;
+    const modeChanged = newSettings.displayMode && newSettings.displayMode !== currentSettings.displayMode;
 
     // Reset custom position if preset position changed
     if (positionChanged) {
@@ -438,12 +563,30 @@
 
     if (isEnabled) {
       const container = document.getElementById(CONTAINER_ID);
+
+      // If display mode changed, need to re-setup the video
+      if (modeChanged) {
+        const targetVideo = getTargetVideo();
+        if (targetVideo) {
+          // Restore any moved video first
+          restoreMovedVideo();
+          // Remove any mirrored video
+          if (activeVideo && activeVideo.classList.contains('ccf-video-mirrored')) {
+            activeVideo.srcObject = null;
+            activeVideo.remove();
+          }
+          activeVideo = null;
+          // Re-setup with new mode
+          setupVideoInContainer(targetVideo);
+        }
+      }
+
       if (container) {
         if (positionChanged) {
           applyPosition(container);
         }
-        if (sizeChanged && clonedVideo) {
-          clonedVideo.style.width = currentSettings.videoSize + 'px';
+        if (sizeChanged && activeVideo) {
+          activeVideo.style.width = currentSettings.videoSize + 'px';
         }
       }
 
@@ -451,9 +594,8 @@
         updateVideo();
         if (currentSettings.videoSource === 'active-speaker') {
           startActiveSpeakerDetection();
-        } else if (activeSpeakerObserver) {
-          activeSpeakerObserver.disconnect();
-          activeSpeakerObserver = null;
+        } else {
+          stopActiveSpeakerDetection();
         }
       }
     }
@@ -486,9 +628,10 @@
   });
 
   // Load initial settings
-  chrome.storage.local.get(['enabled', 'position', 'videoSource', 'customPosition', 'videoSize'], (result) => {
+  chrome.storage.local.get(['enabled', 'position', 'videoSource', 'displayMode', 'customPosition', 'videoSize'], (result) => {
     if (result.position) currentSettings.position = result.position;
     if (result.videoSource) currentSettings.videoSource = result.videoSource;
+    if (result.displayMode) currentSettings.displayMode = result.displayMode;
     if (result.customPosition) currentSettings.customPosition = result.customPosition;
     if (result.videoSize) currentSettings.videoSize = result.videoSize;
 

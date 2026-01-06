@@ -117,6 +117,13 @@ input:disabled + .slider {
   letter-spacing: 0.5px;
 }
 
+.setting-hint {
+  font-size: 10px;
+  color: #666;
+  margin-top: 4px;
+  font-style: italic;
+}
+
 .button-group {
   display: flex;
   gap: 6px;
