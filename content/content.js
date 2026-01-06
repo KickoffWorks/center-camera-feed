@@ -2,22 +2,25 @@
   'use strict';
 
   const CONTAINER_ID = 'center-camera-feed-container';
+  const PICKER_OVERLAY_ID = 'ccf-picker-overlay';
 
   // State
   let isEnabled = false;
-  let activeVideo = null; // The video currently in our container (moved or cloned)
+  let activeVideo = null;
   let observer = null;
   let activeSpeakerObserver = null;
   let pollInterval = null;
+  let isPickerMode = false;
+  let manuallySelectedVideo = null; // User-picked video element
 
   // For restoring moved videos
-  let movedVideoData = null; // { video, originalParent, originalNextSibling, originalStyles }
+  let movedVideoData = null;
 
   let currentSettings = {
     position: 'top-center',
     videoSource: 'self', // 'self' or 'active-speaker'
     displayMode: 'move', // 'move' (default) or 'mirror'
-    customPosition: null, // { x, y } for dragged position
+    customPosition: null,
     videoSize: 200
   };
 
@@ -42,8 +45,7 @@
       activeSpeaker: [
         '[data-participant-id][data-is-active="true"]:not([data-self-name]) video',
         '[data-active-speaker="true"] video'
-      ],
-      speakerIndicator: '[data-participant-id]'
+      ]
     },
     'zoom.us': {
       selfVideo: [
@@ -55,8 +57,7 @@
         '.speaker-active-container video',
         '[class*="active-speaker"] video',
         '.video-avatar__speaking video'
-      ],
-      speakerIndicator: '.video-avatar'
+      ]
     },
     'teams.microsoft.com': {
       selfVideo: [
@@ -66,8 +67,7 @@
       activeSpeaker: [
         '[data-cid="active-speaker-video"] video',
         '.ts-active-speaker video'
-      ],
-      speakerIndicator: '[data-cid]'
+      ]
     },
     'webex.com': {
       selfVideo: [
@@ -77,8 +77,7 @@
       activeSpeaker: [
         '.active-speaker video',
         '[class*="active-speaker"] video'
-      ],
-      speakerIndicator: '[class*="participant"]'
+      ]
     },
     'discord.com': {
       selfVideo: [
@@ -87,8 +86,7 @@
       activeSpeaker: [
         '[class*="speaking"]:not([class*="localVideo"]) video',
         '[class*="voiceUser"][class*="speaking"] video'
-      ],
-      speakerIndicator: '[class*="voiceUser"]'
+      ]
     }
   };
 
@@ -120,6 +118,11 @@
   }
 
   function findSelfVideo() {
+    // If user manually selected a video, use that
+    if (manuallySelectedVideo && manuallySelectedVideo.srcObject && document.contains(manuallySelectedVideo)) {
+      return manuallySelectedVideo;
+    }
+
     const platform = getCurrentPlatform();
     if (!platform) return null;
 
@@ -141,13 +144,17 @@
   }
 
   function findActiveSpeaker() {
+    // If user manually selected a video for active speaker, use that
+    if (manuallySelectedVideo && manuallySelectedVideo.srcObject && document.contains(manuallySelectedVideo)) {
+      return manuallySelectedVideo;
+    }
+
     const platform = getCurrentPlatform();
     if (!platform) return null;
 
     const config = PLATFORM_CONFIG[platform];
     let video = findVideo(config.activeSpeaker);
 
-    // Platform-specific fallbacks
     if (!video) {
       video = findActiveSpeakerFallback();
     }
@@ -156,14 +163,13 @@
   }
 
   function findActiveSpeakerFallback() {
-    // Try to find the largest non-self video (often the active speaker)
     const allVideos = document.querySelectorAll('video');
     let largestVideo = null;
     let largestArea = 0;
 
     for (const video of allVideos) {
-      if (!video.srcObject || video.muted) continue; // Skip self-view (usually muted)
-      if (video.classList.contains('ccf-video')) continue; // Skip our own video
+      if (!video.srcObject || video.muted) continue;
+      if (video.classList.contains('ccf-video')) continue;
 
       const rect = video.getBoundingClientRect();
       const area = rect.width * rect.height;
@@ -181,10 +187,134 @@
     if (currentSettings.videoSource === 'active-speaker') {
       const activeSpeaker = findActiveSpeaker();
       if (activeSpeaker) return activeSpeaker;
-      // Fall back to self if no active speaker found
     }
     return findSelfVideo();
   }
+
+  // ==================== PICKER MODE ====================
+
+  function getAllVideosOnPage() {
+    const videos = [];
+    document.querySelectorAll('video').forEach(video => {
+      if (video.srcObject && !video.classList.contains('ccf-video')) {
+        videos.push(video);
+      }
+    });
+    return videos;
+  }
+
+  function createPickerOverlay() {
+    let overlay = document.getElementById(PICKER_OVERLAY_ID);
+    if (overlay) return overlay;
+
+    overlay = document.createElement('div');
+    overlay.id = PICKER_OVERLAY_ID;
+    overlay.innerHTML = `
+      <div class="ccf-picker-header">
+        <span>Click on a video to select it</span>
+        <button class="ccf-picker-cancel">Cancel</button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('.ccf-picker-cancel').addEventListener('click', cancelPicker);
+
+    return overlay;
+  }
+
+  function startPicker() {
+    if (isPickerMode) return;
+    isPickerMode = true;
+
+    const overlay = createPickerOverlay();
+    overlay.style.display = 'block';
+
+    const videos = getAllVideosOnPage();
+
+    if (videos.length === 0) {
+      cancelPicker();
+      return { success: false, message: 'No videos found on page' };
+    }
+
+    // Add highlight handlers to all videos
+    videos.forEach(video => {
+      video.classList.add('ccf-picker-candidate');
+      video.addEventListener('mouseenter', handlePickerHover);
+      video.addEventListener('mouseleave', handlePickerUnhover);
+      video.addEventListener('click', handlePickerClick);
+    });
+
+    // Listen for escape key
+    document.addEventListener('keydown', handlePickerEscape);
+
+    return { success: true, videoCount: videos.length };
+  }
+
+  function handlePickerHover(e) {
+    e.target.classList.add('ccf-picker-highlight');
+  }
+
+  function handlePickerUnhover(e) {
+    e.target.classList.remove('ccf-picker-highlight');
+  }
+
+  function handlePickerClick(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const selectedVideo = e.target;
+    manuallySelectedVideo = selectedVideo;
+
+    // Clear the manual selection marker from storage to indicate manual pick
+    chrome.storage.local.set({ hasManualSelection: true });
+
+    endPicker();
+
+    // If extension is enabled, update the video
+    if (isEnabled) {
+      setupVideoInContainer(selectedVideo);
+    }
+
+    // Notify popup
+    chrome.runtime.sendMessage({ action: 'videoPicked', success: true });
+  }
+
+  function handlePickerEscape(e) {
+    if (e.key === 'Escape') {
+      cancelPicker();
+    }
+  }
+
+  function cancelPicker() {
+    endPicker();
+    chrome.runtime.sendMessage({ action: 'videoPicked', success: false, cancelled: true });
+  }
+
+  function endPicker() {
+    isPickerMode = false;
+
+    const overlay = document.getElementById(PICKER_OVERLAY_ID);
+    if (overlay) {
+      overlay.style.display = 'none';
+    }
+
+    // Remove highlight handlers from all videos
+    document.querySelectorAll('.ccf-picker-candidate').forEach(video => {
+      video.classList.remove('ccf-picker-candidate', 'ccf-picker-highlight');
+      video.removeEventListener('mouseenter', handlePickerHover);
+      video.removeEventListener('mouseleave', handlePickerUnhover);
+      video.removeEventListener('click', handlePickerClick);
+    });
+
+    document.removeEventListener('keydown', handlePickerEscape);
+  }
+
+  function clearManualSelection() {
+    manuallySelectedVideo = null;
+    chrome.storage.local.remove('hasManualSelection');
+  }
+
+  // ==================== CONTAINER & VIDEO ====================
 
   function createContainer() {
     let container = document.getElementById(CONTAINER_ID);
@@ -194,7 +324,6 @@
     container.id = CONTAINER_ID;
     document.body.appendChild(container);
 
-    // Make it draggable
     let isDragging = false;
     let dragOffsetX = 0;
     let dragOffsetY = 0;
@@ -220,7 +349,6 @@
         container.style.bottom = 'auto';
         container.style.transform = 'none';
 
-        // Save custom position
         currentSettings.customPosition = { x, y };
         chrome.storage.local.set({ customPosition: currentSettings.customPosition });
       }
@@ -233,7 +361,6 @@
       }
     });
 
-    // Add close button
     const closeBtn = document.createElement('button');
     closeBtn.className = 'ccf-close-btn';
     closeBtn.innerHTML = '×';
@@ -245,13 +372,11 @@
     });
     container.appendChild(closeBtn);
 
-    // Add source indicator
     const sourceIndicator = document.createElement('div');
     sourceIndicator.className = 'ccf-source-indicator';
     sourceIndicator.id = 'ccf-source-indicator';
     container.appendChild(sourceIndicator);
 
-    // Add drag handle
     const dragHandle = document.createElement('div');
     dragHandle.className = 'ccf-drag-handle';
     dragHandle.innerHTML = '⋮⋮';
@@ -277,7 +402,11 @@
   function updateSourceIndicator() {
     const indicator = document.getElementById('ccf-source-indicator');
     if (indicator) {
-      indicator.textContent = currentSettings.videoSource === 'active-speaker' ? 'Speaker' : 'You';
+      let label = currentSettings.videoSource === 'active-speaker' ? 'Speaker' : 'You';
+      if (manuallySelectedVideo) {
+        label += ' (picked)';
+      }
+      indicator.textContent = label;
       indicator.className = 'ccf-source-indicator ' +
         (currentSettings.videoSource === 'active-speaker' ? 'ccf-source-speaker' : 'ccf-source-self');
     }
@@ -287,11 +416,9 @@
     if (movedVideoData) {
       const { video, originalParent, originalNextSibling, originalStyles } = movedVideoData;
 
-      // Restore original styles
       video.style.cssText = originalStyles;
       video.classList.remove('ccf-video', 'ccf-video-moved');
 
-      // Put video back in original location
       if (originalParent) {
         if (originalNextSibling && originalNextSibling.parentNode === originalParent) {
           originalParent.insertBefore(video, originalNextSibling);
@@ -307,16 +434,13 @@
   function moveVideoToContainer(sourceVideo) {
     const container = createContainer();
 
-    // Restore any previously moved video first
     restoreMovedVideo();
 
-    // Remove any existing video in container
     const existingVideo = container.querySelector('.ccf-video');
     if (existingVideo && existingVideo !== sourceVideo) {
       existingVideo.remove();
     }
 
-    // Save original location and styles
     movedVideoData = {
       video: sourceVideo,
       originalParent: sourceVideo.parentNode,
@@ -324,7 +448,6 @@
       originalStyles: sourceVideo.style.cssText
     };
 
-    // Move the video element to our container
     sourceVideo.classList.add('ccf-video', 'ccf-video-moved');
     sourceVideo.style.width = currentSettings.videoSize + 'px';
     sourceVideo.style.height = 'auto';
@@ -334,7 +457,6 @@
     sourceVideo.style.margin = '0';
     sourceVideo.style.padding = '0';
 
-    // Mirror for self-view
     if (currentSettings.videoSource === 'self') {
       sourceVideo.style.transform = 'scaleX(-1)';
     } else {
@@ -354,31 +476,25 @@
   function mirrorVideoToContainer(sourceVideo) {
     const container = createContainer();
 
-    // Restore any previously moved video first
     restoreMovedVideo();
 
-    // Remove existing video if any
     const existingVideo = container.querySelector('.ccf-video');
     if (existingVideo) {
       existingVideo.remove();
     }
 
-    // Create a new video element that mirrors the source
     const mirroredVideo = document.createElement('video');
     mirroredVideo.className = 'ccf-video ccf-video-mirrored';
     mirroredVideo.autoplay = true;
     mirroredVideo.muted = true;
     mirroredVideo.playsInline = true;
 
-    // Apply size
     mirroredVideo.style.width = currentSettings.videoSize + 'px';
 
-    // Copy the stream
     if (sourceVideo.srcObject) {
       mirroredVideo.srcObject = sourceVideo.srcObject;
     }
 
-    // Mirror for self-view
     if (currentSettings.videoSource === 'self') {
       mirroredVideo.style.transform = 'scaleX(-1)';
     } else {
@@ -404,11 +520,14 @@
   }
 
   function updateVideo() {
+    // Don't auto-update if user manually selected a video
+    if (manuallySelectedVideo && document.contains(manuallySelectedVideo)) {
+      return;
+    }
+
     const targetVideo = getTargetVideo();
     if (!targetVideo) return;
 
-    // For move mode, check if it's a different video element
-    // For mirror mode, check if the stream changed
     if (currentSettings.displayMode === 'move') {
       if (activeVideo !== targetVideo) {
         setupVideoInContainer(targetVideo);
@@ -428,13 +547,15 @@
       clearInterval(pollInterval);
     }
 
-    // Poll for active speaker changes
     pollInterval = setInterval(() => {
       if (!isEnabled) {
         clearInterval(pollInterval);
         pollInterval = null;
         return;
       }
+
+      // Don't auto-switch if user manually selected
+      if (manuallySelectedVideo) return;
 
       if (currentSettings.videoSource === 'active-speaker') {
         const newSpeaker = findActiveSpeaker();
@@ -453,9 +574,8 @@
       }
     }, 500);
 
-    // Also use MutationObserver for faster detection
     activeSpeakerObserver = new MutationObserver(() => {
-      if (isEnabled && currentSettings.videoSource === 'active-speaker') {
+      if (isEnabled && currentSettings.videoSource === 'active-speaker' && !manuallySelectedVideo) {
         updateVideo();
       }
     });
@@ -492,11 +612,10 @@
     setupVideoInContainer(targetVideo);
     isEnabled = true;
 
-    // Watch for video source changes
     if (observer) observer.disconnect();
 
     observer = new MutationObserver(() => {
-      if (isEnabled) {
+      if (isEnabled && !manuallySelectedVideo) {
         updateVideo();
       }
     });
@@ -508,7 +627,6 @@
       attributeFilter: ['src', 'srcObject']
     });
 
-    // Start active speaker detection if needed
     if (currentSettings.videoSource === 'active-speaker') {
       startActiveSpeakerDetection();
     }
@@ -521,10 +639,8 @@
 
     const container = document.getElementById(CONTAINER_ID);
 
-    // Restore moved video to original location
     restoreMovedVideo();
 
-    // For mirrored videos, just clear the stream
     if (activeVideo && activeVideo.classList.contains('ccf-video-mirrored')) {
       activeVideo.srcObject = null;
       activeVideo.remove();
@@ -553,10 +669,14 @@
     const sizeChanged = newSettings.videoSize && newSettings.videoSize !== currentSettings.videoSize;
     const modeChanged = newSettings.displayMode && newSettings.displayMode !== currentSettings.displayMode;
 
-    // Reset custom position if preset position changed
     if (positionChanged) {
       currentSettings.customPosition = null;
       chrome.storage.local.remove('customPosition');
+    }
+
+    // Clear manual selection when video source changes
+    if (sourceChanged) {
+      clearManualSelection();
     }
 
     Object.assign(currentSettings, newSettings);
@@ -564,19 +684,15 @@
     if (isEnabled) {
       const container = document.getElementById(CONTAINER_ID);
 
-      // If display mode changed, need to re-setup the video
-      if (modeChanged) {
+      if (modeChanged || sourceChanged) {
         const targetVideo = getTargetVideo();
         if (targetVideo) {
-          // Restore any moved video first
           restoreMovedVideo();
-          // Remove any mirrored video
           if (activeVideo && activeVideo.classList.contains('ccf-video-mirrored')) {
             activeVideo.srcObject = null;
             activeVideo.remove();
           }
           activeVideo = null;
-          // Re-setup with new mode
           setupVideoInContainer(targetVideo);
         }
       }
@@ -591,7 +707,6 @@
       }
 
       if (sourceChanged) {
-        updateVideo();
         if (currentSettings.videoSource === 'active-speaker') {
           startActiveSpeakerDetection();
         } else {
@@ -611,7 +726,11 @@
       }
       sendResponse({ success: true, enabled: isEnabled });
     } else if (message.action === 'getStatus') {
-      sendResponse({ enabled: isEnabled, settings: currentSettings });
+      sendResponse({
+        enabled: isEnabled,
+        settings: currentSettings,
+        hasManualSelection: !!manuallySelectedVideo
+      });
     } else if (message.action === 'updateSettings') {
       updateSettings(message.settings);
       sendResponse({ success: true });
@@ -621,6 +740,18 @@
       const container = document.getElementById(CONTAINER_ID);
       if (container) {
         applyPosition(container);
+      }
+      sendResponse({ success: true });
+    } else if (message.action === 'startPicker') {
+      const result = startPicker();
+      sendResponse(result);
+    } else if (message.action === 'clearManualSelection') {
+      clearManualSelection();
+      if (isEnabled) {
+        const targetVideo = getTargetVideo();
+        if (targetVideo) {
+          setupVideoInContainer(targetVideo);
+        }
       }
       sendResponse({ success: true });
     }

@@ -111,3 +111,59 @@
   background: #444;
   color: #aaa;
 }
+
+/* Picker Mode Styles */
+#ccf-picker-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 2147483646;
+  display: none;
+}
+
+.ccf-picker-header {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1a1a2e;
+  color: white;
+  padding: 12px 20px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  z-index: 2147483647;
+}
+
+.ccf-picker-cancel {
+  background: #ff4444;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ccf-picker-cancel:hover {
+  background: #ff6666;
+}
+
+.ccf-picker-candidate {
+  cursor: crosshair !important;
+  position: relative;
+}
+
+.ccf-picker-highlight {
+  outline: 4px solid #4a9eff !important;
+  outline-offset: 2px;
+  box-shadow: 0 0 20px rgba(74, 158, 255, 0.5) !important;
+}

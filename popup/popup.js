@@ -9,11 +9,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   const resetPosition = document.getElementById('resetPosition');
   const sizeSlider = document.getElementById('sizeSlider');
   const sizeValue = document.getElementById('sizeValue');
+  const pickVideoBtn = document.getElementById('pickVideo');
+  const clearPickBtn = document.getElementById('clearPick');
+  const pickerHint = document.getElementById('pickerHint');
 
   const MODE_HINTS = {
     'move': 'Moves the original video element',
     'mirror': 'Creates a copy of the video stream'
   };
+
+  let isPicking = false;
 
   // Load saved state
   const result = await chrome.storage.local.get([
@@ -21,7 +26,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     'position',
     'videoSource',
     'displayMode',
-    'videoSize'
+    'videoSize',
+    'hasManualSelection'
   ]);
 
   toggle.checked = result.enabled || false;
@@ -39,6 +45,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   updateModeUI(currentMode);
   sizeSlider.value = currentSize;
   sizeValue.textContent = currentSize;
+
+  // Update picker UI based on manual selection state
+  updatePickerUI(result.hasManualSelection);
 
   // Check if we're on a supported page
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -58,7 +67,26 @@ document.addEventListener('DOMContentLoaded', async () => {
   } else {
     status.textContent = 'Open a supported video call to use this extension.';
     toggle.disabled = true;
+    pickVideoBtn.disabled = true;
   }
+
+  // Listen for messages from content script
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.action === 'videoPicked') {
+      isPicking = false;
+      pickVideoBtn.classList.remove('picking');
+      pickVideoBtn.textContent = 'Pick video manually';
+
+      if (message.success) {
+        updatePickerUI(true);
+        status.textContent = 'Video selected!';
+        status.classList.add('active');
+        status.classList.remove('error');
+      } else if (message.cancelled) {
+        pickerHint.textContent = '';
+      }
+    }
+  });
 
   // Handle enable toggle
   toggle.addEventListener('change', async () => {
@@ -91,6 +119,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await chrome.storage.local.set({ videoSource: value });
 
+    // Clear manual selection when source changes
+    updatePickerUI(false);
+
     if (isSupported && toggle.checked) {
       try {
         await chrome.tabs.sendMessage(tab.id, {
@@ -119,6 +150,51 @@ document.addEventListener('DOMContentLoaded', async () => {
           action: 'updateSettings',
           settings: { displayMode: value }
         });
+      } catch (e) {
+        // Content script not ready
+      }
+    }
+  });
+
+  // Handle pick video button
+  pickVideoBtn.addEventListener('click', async () => {
+    if (!isSupported) return;
+
+    if (isPicking) {
+      // Already picking, cancel
+      return;
+    }
+
+    isPicking = true;
+    pickVideoBtn.classList.add('picking');
+    pickVideoBtn.textContent = 'Click a video...';
+    pickerHint.textContent = 'Click on any video on the page to select it';
+
+    try {
+      const response = await chrome.tabs.sendMessage(tab.id, { action: 'startPicker' });
+      if (!response.success) {
+        isPicking = false;
+        pickVideoBtn.classList.remove('picking');
+        pickVideoBtn.textContent = 'Pick video manually';
+        pickerHint.textContent = response.message || 'No videos found';
+      }
+    } catch (e) {
+      isPicking = false;
+      pickVideoBtn.classList.remove('picking');
+      pickVideoBtn.textContent = 'Pick video manually';
+      status.textContent = 'Please refresh the page and try again.';
+      status.classList.add('error');
+    }
+  });
+
+  // Handle clear pick button
+  clearPickBtn.addEventListener('click', async () => {
+    await chrome.storage.local.remove('hasManualSelection');
+    updatePickerUI(false);
+
+    if (isSupported) {
+      try {
+        await chrome.tabs.sendMessage(tab.id, { action: 'clearManualSelection' });
       } catch (e) {
         // Content script not ready
       }
@@ -167,7 +243,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const value = parseInt(e.target.value);
     sizeValue.textContent = value;
 
-    // Debounce the save and message
     clearTimeout(sizeTimeout);
     sizeTimeout = setTimeout(async () => {
       await chrome.storage.local.set({ videoSize: value });
@@ -206,5 +281,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       btn.classList.toggle('active', btn.dataset.value === mode);
     });
     modeHint.textContent = MODE_HINTS[mode] || '';
+  }
+
+  function updatePickerUI(hasManualSelection) {
+    if (hasManualSelection) {
+      clearPickBtn.style.display = 'block';
+      pickerHint.textContent = 'Using manually selected video';
+      pickerHint.style.color = '#4a9eff';
+    } else {
+      clearPickBtn.style.display = 'none';
+      pickerHint.textContent = '';
+      pickerHint.style.color = '';
+    }
   }
 });
