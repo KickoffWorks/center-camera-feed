@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Center Camera Feed</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <div class="header">
+      <div class="icon">📹</div>
+      <h1>Center Camera Feed</h1>
+    </div>
+
+    <p class="description">
+      Move your self-view to the top center of the screen for better eye contact.
+    </p>
+
+    <div class="toggle-container">
+      <label class="toggle">
+        <input type="checkbox" id="enableToggle">
+        <span class="slider"></span>
+      </label>
+      <span class="toggle-label" id="toggleLabel">Disabled</span>
+    </div>
+
+    <div class="status" id="status">
+      Open a video call to use this extension.
+    </div>
+
+    <div class="supported">
+      <p>Supported platforms:</p>
+      <ul>
+        <li>Google Meet</li>
+        <li>Zoom</li>
+        <li>Microsoft Teams</li>
+        <li>Webex</li>
+        <li>Discord</li>
+      </ul>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
